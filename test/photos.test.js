@@ -1,0 +1,23 @@
+const { test, before, after } = require('node:test'); const assert = require('node:assert');
+const fs = require('fs'), os = require('os'), path = require('path');
+process.env.ADMIN_PASSWORD = 'test-password-123'; process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'pf2-'));
+process.env.BASE_URL = 'https://example.com';
+const server = require('../server'); let base, cookie = '';
+const WEBP = 'data:image/webp;base64,' + Buffer.concat([Buffer.from('RIFF'), Buffer.alloc(4), Buffer.from('WEBPVP8 '), Buffer.alloc(20)]).toString('base64');
+const call = (m, u, b) => fetch(base + u, { method: m, headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'portfolio', cookie }, body: b && JSON.stringify(b) });
+before(() => new Promise(r => server.listen(0, '127.0.0.1', () => { base = 'http://127.0.0.1:' + server.address().port; r(); })));
+after(() => server.close());
+test('webp upload, share page, undo delete, reorder', async () => {
+  cookie = (await call('POST', '/api/login', { password: 'test-password-123' })).headers.get('set-cookie').split(';')[0];
+  const mk = async t => (await (await call('POST', '/api/photos', { full: WEBP, thumb: WEBP, lq: WEBP, w: 300, h: 400, title: t, note: 'A "note"' })).json()).photo;
+  const a = await mk('First'), b = await mk('Second');
+  assert.match(a.src, /\.webp$/); assert.ok(a.lq);
+  const html = await (await fetch(base + '/photo/' + a.id)).text();
+  assert.match(html, /<title>First — /); assert.match(html, new RegExp('og:image" content="https://example.com' + a.src));
+  assert.equal((await call('DELETE', '/api/photos/' + a.id)).status, 200);
+  assert.equal((await (await call('GET', '/api/photos')).json()).photos.length, 1);
+  const r = await (await call('POST', '/api/photos/' + a.id + '/restore')).json(); assert.equal(r.photo.id, a.id);
+  assert.equal((await call('POST', '/api/photos/' + a.id + '/restore')).status, 404);
+  await call('PUT', '/api/photos/order', { ids: [a.id, b.id] });
+  assert.equal((await (await call('GET', '/api/photos')).json()).photos[0].id, a.id);
+});
